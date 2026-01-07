@@ -15,12 +15,16 @@ from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash, check_password_hash
 
 # --- Cloudinary 感应配置 ---
-CLOUDINARY_CLOUD_NAME = os.getenv('dxkrc6jat')
+# 第一行：获取云端名称。如果拿不到，说明是本地环境，下面的 config 就不执行
+CLOUDINARY_CLOUD_NAME = os.getenv('CLOUDINARY_CLOUD_NAME')
+
 if CLOUDINARY_CLOUD_NAME:
     cloudinary.config(
         cloud_name=CLOUDINARY_CLOUD_NAME,
-        api_key=os.getenv('718165212344278'),
-        api_secret=os.getenv('Ot_kGSWGhGUbqgG7iNgEAY3-IqE'),
+        # 第二行：获取 API Key
+        api_key=os.getenv('CLOUDINARY_API_KEY'),
+        # 第三行：获取 API Secret
+        api_secret=os.getenv('CLOUDINARY_API_SECRET'),
         secure=True
     )
 
@@ -53,12 +57,20 @@ upload_path = os.path.join(basedir, 'static', 'uploads')
 os.makedirs(instance_path, exist_ok=True)
 os.makedirs(upload_path, exist_ok=True)
 
-# 应用配置
+# --- 数据库连接配置 ---
+# 1. 优先读取 Render 提供的 DATABASE_URL，没有则用本地 travel.db
+db_url = os.getenv('DATABASE_URL', f"sqlite:///{os.path.join(instance_path, 'travel.db')}")
+
+# 2. 修复 SQLAlchemy 1.4+ 版本对 postgresql:// 协议头的强制要求
+if db_url and db_url.startswith("postgres://"):
+    db_url = db_url.replace("postgres://", "postgresql://", 1)
+
+# 3. 统一应用配置
 app.config.update(
-    SQLALCHEMY_DATABASE_URI=f"sqlite:///{os.path.join(instance_path, 'travel.db')}",
+    SQLALCHEMY_DATABASE_URI=db_url,      # 👈 这里现在是动态的了
     SQLALCHEMY_TRACK_MODIFICATIONS=False,
     UPLOAD_FOLDER=upload_path,
-    MAX_CONTENT_LENGTH=16 * 1024 * 1024  # 限制文件上传大小 (16MB)
+    MAX_CONTENT_LENGTH=16 * 1024 * 1024 
 )
 
 db = SQLAlchemy(app)

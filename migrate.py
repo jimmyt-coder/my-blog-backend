@@ -5,7 +5,7 @@ import os
 
 # --- 配置区 ---
 local_db = os.path.join('instance', 'travel.db')
-# 【关键】请填入你的 External Database URL
+# 【关键 External Database URL
 cloud_url = "postgresql://jimmyt:f879arZftWNujKeT5u2ZvUpZdHj1Wabm@dpg-d5ejb0u3jp1c73deqlsg-a.frankfurt-postgres.render.com/blog_data_2mqc"
 
 def start_migration():
