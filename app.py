@@ -375,9 +375,15 @@ def delete_comment(comment_id):
         return jsonify({"message": "Deleted"}), 200
     return jsonify({"message": "Denied"}), 403
 
-if __name__ == '__main__':
+# --- 数据库初始化 ---
+# 这样无论是在本地运行还是在 Render 上通过 Gunicorn 运行，都会触发检查
+try:
     with app.app_context():
         db.create_all()
-    # 修改这里：添加 host='0.0.0.0'，去掉 debug=True
-    # Render 会自动分配端口，但在本地运行测试时它依然默认 5000
-    app.run(host='0.0.0.0', port=5000)
+        print("Database tables synchronized successfully!")
+except Exception as e:
+    print(f"Database sync failed: {e}")
+
+if __name__ == '__main__':
+    # 本地开发模式
+    app.run(host='0.0.0.0', port=5000, debug=True)
