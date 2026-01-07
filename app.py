@@ -1,4 +1,6 @@
 # --- 1. 标准库 (Standard Library) ---
+import cloudinary
+import cloudinary.uploader
 import os
 import json
 from datetime import datetime, timezone
@@ -12,16 +14,27 @@ from flask_migrate import Migrate
 from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash, check_password_hash
 
+# --- Cloudinary 感应配置 ---
+CLOUDINARY_CLOUD_NAME = os.getenv('dxkrc6jat')
+if CLOUDINARY_CLOUD_NAME:
+    cloudinary.config(
+        cloud_name=CLOUDINARY_CLOUD_NAME,
+        api_key=os.getenv('718165212344278'),
+        api_secret=os.getenv('Ot_kGSWGhGUbqgG7iNgEAY3-IqE'),
+        secure=True
+    )
+
 # --- 初始化配置 ---
 app = Flask(__name__)
 # CORS(app)
-# 修改这里：允许所有来源访问，或者等部署后填入你的 Render 网址
+# 允许所有来源访问，或者等部署后填入 Render 网址
 CORS(app, resources={r"/*": {"origins": "*"}})
 
-# --- A. 把辅助函数放在这里 (顶格写) ---
+# --- A. 辅助函数 ---
 def remove_physical_file(url):
-    """清理硬盘上的物理文件"""
-    if not url: return
+    """仅仅负责：删除本地硬盘上的旧文件"""
+    if not url or url.startswith('http'): 
+        return
     try:
         # 确保路径拼接正确：app.root_path 通常是项目根目录
         # .lstrip('/') 是为了防止 join 时把 /static 识别为绝对路径
@@ -29,7 +42,7 @@ def remove_physical_file(url):
         if os.path.exists(file_path):
             os.remove(file_path)
     except Exception as e:
-        print(f"清理文件失败: {e}")
+        print(f"清理文件失败: {e}")   
 
 # 路径管理
 basedir = os.path.abspath(os.path.dirname(__file__))
@@ -50,6 +63,21 @@ app.config.update(
 
 db = SQLAlchemy(app)
 migrate = Migrate(app, db)
+
+# 智能上传
+def smart_upload(file):
+    if not file or file.filename == '':
+        return None
+    
+    # 云端：感应到 Render 环境变量就传 Cloudinary
+    if os.getenv('CLOUDINARY_CLOUD_NAME'):
+        upload_result = cloudinary.uploader.upload(file)
+        return upload_result['secure_url']
+    
+    # 本地模式
+    filename = f"{datetime.now().strftime('%Y%m%d%H%M%S%f')}_{secure_filename(file.filename)}"
+    file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+    return f"/static/uploads/{filename}"
 
 # --- 数据库模型 ---
 class User(db.Model):
@@ -149,7 +177,7 @@ def login():
 @app.route('/api/users/<int:user_id>/posts', methods=['GET'])
 def get_user_posts(user_id):
     try:
-        # 使用你已经实现的 joinedload 优化方案，防止 N+1 查询
+        # 使用已经实现的 joinedload 优化方案，防止 N+1 查询
         posts = Post.query.filter_by(user_id=user_id)\
             .options(joinedload(Post.author), joinedload(Post.images))\
             .order_by(Post.created_at.desc())\
@@ -165,7 +193,7 @@ def get_posts():
     #  获取前端传来的搜索关键词 (例如 ?q=paris)
     search_query = request.args.get('q', '')
 
-    #  基础查询（保留你原来的优化预加载）
+    #  基础查询）
     query = Post.query.options(
         joinedload(Post.author), 
         joinedload(Post.images)
@@ -200,34 +228,26 @@ def get_post_detail(post_id):
 @app.route('/api/posts', methods=['POST'])
 def create_post():
     try:
-        # A. 接收文本 (对应 formData.append)
-        title = request.form.get('title')
-        content = request.form.get('content')
-        user_id = request.form.get('user_id')
+        new_post = Post(
+            title=request.form.get('title'),
+            content=request.form.get('content'),
+            user_id=request.form.get('user_id')
+        )
 
-        new_post = Post(title=title, content=content, user_id=user_id)
-
-        # B. 接收封面文件 (如果有)
+        # 封面图：一句话搞定，管它是本地还是云端
         if 'image' in request.files:
-            file = request.files['image']
-            if file.filename != '':
-                filename = f"{datetime.now().strftime('%Y%m%d%H%M%S')}_{secure_filename(file.filename)}"
-                file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
-                new_post.image_url = f"/static/uploads/{filename}"
+            new_post.image_url = smart_upload(request.files['image'])
 
-        # C. 接收画廊多图 (如果有)
+        # 画廊图：同样一句话搞定
         if 'images' in request.files:
-            gallery_files = request.files.getlist('images')
-            for f in gallery_files:
-                if f.filename != '':
-                    f_name = f"{datetime.now().strftime('%Y%m%d%H%M%S%f')}_{secure_filename(f.filename)}"
-                    f.save(os.path.join(app.config['UPLOAD_FOLDER'], f_name))
-                    db.session.add(PostImage(url=f"/static/uploads/{f_name}", post=new_post))
+            for f in request.files.getlist('images'):
+                url = smart_upload(f)
+                if url:
+                    db.session.add(PostImage(url=url, post=new_post))
 
         db.session.add(new_post)
         db.session.commit()
-        return jsonify({"message": "Post created successfully", "id": new_post.id}), 201
-
+        return jsonify({"message": "OK", "id": new_post.id}), 201
     except Exception as e:
         db.session.rollback()
         return jsonify({"error": str(e)}), 500
@@ -244,13 +264,11 @@ def upload_image():
     
     file = request.files['file']
     # 生成带时间戳的文件名
-    filename = f"{datetime.now().strftime('%Y%m%d%H%M%S')}_{secure_filename(file.filename)}"
+    url = smart_upload(file)
     
-    # 保存物理文件
-    file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
-    
-    # 【核心修改点】：只返回以 /static 开头的相对路径
-    return jsonify({"url": f"/static/uploads/{filename}"}), 200
+    if url:
+        return jsonify({"url": url}), 200
+    return jsonify({"message": "Upload failed"}), 500
 
 @app.route('/api/posts/<int:post_id>', methods=['DELETE'])
 def delete_post(post_id):
@@ -276,7 +294,7 @@ def update_post(post_id):
     post.title = request.form.get('title', post.title)
     post.content = request.form.get('content', post.content)
 
-    # 2. 处理封面图删除/更换 (场景 B & C)
+    # 2. 处理封面图删除/更换
     # 对应前端的 coverDeleted 逻辑
     if request.form.get('delete_cover') == 'true':
         post.image_url = None # 数据库清空
@@ -284,13 +302,10 @@ def update_post(post_id):
     # 对应前端的 newCoverFile 逻辑
     if 'image' in request.files:
         file = request.files['image']
-        if file and file.filename:
-            timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
-            filename = f"{timestamp}_cover_{secure_filename(file.filename)}"
-            file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
-            post.image_url = f"/static/uploads/{filename}"
+        if file and file.filename:                      
+            post.image_url = smart_upload(request.files['image'])
 
-    # 3. 画廊图片精准删除 (核心修改点！)
+    # 3. 画廊图片精准删除
     # 因为前端传的是 JSON 字符串，所以这里要解析
     removed_ids_json = request.form.get('delete_image_ids', '[]')        
     try:
@@ -319,18 +334,12 @@ def update_post(post_id):
     if 'images' in request.files:
         gallery_files = request.files.getlist('images')
         for file in gallery_files:
-            if file and file.filename:
-                timestamp = datetime.now().strftime('%Y%m%d%H%M%S%f')
-                filename = f"{timestamp}_{secure_filename(file.filename)}"
-                file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
-                
-                db.session.add(PostImage(
-                    url=f"/static/uploads/{filename}", 
-                    post_id=post.id
-                ))
+            new_url = smart_upload(file) 
+            if new_url:
+                db.session.add(PostImage(url=new_url, post_id=post.id))
     try:
         db.session.commit()
-        # 确保你的 Post 模型有 to_dict 方法，或者手动返回数据
+        # 确保 Post 模型有 to_dict 方法，或者手动返回数据
         return jsonify({"message": "Update successful"}), 200
     except Exception as e:
         db.session.rollback()
@@ -353,11 +362,6 @@ def delete_comment(comment_id):
         db.session.commit()
         return jsonify({"message": "Deleted"}), 200
     return jsonify({"message": "Denied"}), 403
-
-# if __name__ == '__main__':
-#     with app.app_context():
-#         db.create_all()
-#     app.run(debug=True)
 
 if __name__ == '__main__':
     with app.app_context():
